@@ -10,17 +10,14 @@ const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
 
 // IMPORTANTE: Para desplegar en GitHub Pages, DEBES reemplazar esto con la configuración REAL de tu proyecto Firebase.
 // Obtén esto de la configuración de tu proyecto Firebase -> Configuración del proyecto -> General -> Tus apps -> Fragmento de SDK de Firebase -> Config
-const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
-    // **************************************************************************
-    // *** PEGA AQUÍ LA CONFIGURACIÓN REAL DE TU PROYECTO FIREBASE ***
-    // **************************************************************************
-    apiKey: "AIzaSyBhOPKsR8ZCnjSQAOpbKGJyflOyfEoQk9Q",
-    authDomain: "reddit-content-assistant.firebaseapp.com",
-    projectId: "reddit-content-assistant",
-    storageBucket: "reddit-content-assistant.firebasestorage.app",
-    messagingSenderId: "481199590667",
-    appId: "1:481199590667:web:fd2310fa11b81f0153e60e",
-    measurementId: "G-JFDRFHS9KL"
+const firebaseConfig = {
+    apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+    authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+    projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+    storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+    messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+    appId: import.meta.env.VITE_FIREBASE_APP_ID,
+    measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID
 };
 
 const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
@@ -137,37 +134,25 @@ const App = () => {
     useEffect(() => {
         const initFirebase = async () => {
             try {
-                // Determinar si se proporciona una configuración real de Firebase (desde Canvas o explícitamente por el usuario)
-                const isRealFirebaseConfig = firebaseConfig.apiKey && firebaseConfig.apiKey !== "dummy-api-key-for-local-dev";
+                const app = initializeApp(firebaseConfig);
+                const firestore = getFirestore(app);
+                const authInstance = getAuth(app);
+                setDb(firestore);
+                setAuth(authInstance);
 
-                if (isRealFirebaseConfig) {
-                    const app = initializeApp(firebaseConfig);
-                    const firestore = getFirestore(app);
-                    const authInstance = getAuth(app);
-                    setDb(firestore);
-                    setAuth(authInstance);
-
-                    onAuthStateChanged(authInstance, async (user) => {
-                        if (user) {
-                            setUserId(user.uid);
+                onAuthStateChanged(authInstance, async (user) => {
+                    if (user) {
+                        setUserId(user.uid);
+                    } else {
+                        if (initialAuthToken) { // Este token solo está disponible en Canvas
+                            await signInWithCustomToken(authInstance, initialAuthToken);
                         } else {
-                            if (initialAuthToken) { // Este token solo está disponible en Canvas
-                                await signInWithCustomToken(authInstance, initialAuthToken);
-                            } else {
-                                // Para aplicaciones desplegadas (no Canvas) o desarrollo local sin token, iniciar sesión anónimamente
-                                await signInAnonymously(authInstance);
-                            }
+                            // Para aplicaciones desplegadas (no Canvas) o desarrollo local sin token, iniciar sesión anónimamente
+                            await signInAnonymously(authInstance);
                         }
-                        setLoading(false); // Establecer loading en false después de determinar el estado de autenticación
-                    });
-                } else {
-                    // Ejecutando sin una conexión real a Firebase (desarrollo local o desplegado sin configuración)
-                    console.warn("Ejecutando sin una conexión real a Firebase. Las operaciones de Firestore no se persistirán.");
-                    setLoading(false);
-                    setUserId("local-dev-user"); // ID de usuario ficticio para operaciones en memoria
-                    setDb(null); // Asegurar que db sea null
-                    setAuth(null); // Asegurar que auth sea null
-                }
+                    }
+                    setLoading(false); // Establecer loading en false después de determinar el estado de autenticación
+                });
 
             } catch (err) {
                 console.error("Error al inicializar Firebase:", err);
