@@ -2,25 +2,30 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, collection, addDoc, query, orderBy, onSnapshot, doc, updateDoc, getDocs } from 'firebase/firestore';
+import { callGeminiAPI, fetchRedditTrends as fetchTrends, publishToReddit } from './api';
 
-// Global variables provided by the Canvas environment
-// When running locally, these will be undefined, so we provide fallbacks.
+// Global variables provided by el entorno Canvas.
+// Cuando se ejecuta localmente o se despliega fuera de Canvas, estas serán undefined.
 const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+
+// IMPORTANTE: Para desplegar en GitHub Pages, DEBES reemplazar esto con la configuración REAL de tu proyecto Firebase.
+// Obtén esto de la configuración de tu proyecto Firebase -> Configuración del proyecto -> General -> Tus apps -> Fragmento de SDK de Firebase -> Config
 const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
-    // Dummy Firebase config for local development.
-    // This allows the app to initialize Firebase locally without crashing,
-    // but it won't connect to a real Firestore database.
-    // Replace with your actual Firebase config if you want local database access.
-    apiKey: "dummy-api-key",
-    authDomain: "dummy-auth-domain",
-    projectId: "dummy-project-id",
-    storageBucket: "dummy-storage-bucket",
-    messagingSenderId: "dummy-messaging-sender-id",
-    appId: "dummy-app-id"
+    // **************************************************************************
+    // *** PEGA AQUÍ LA CONFIGURACIÓN REAL DE TU PROYECTO FIREBASE ***
+    // **************************************************************************
+    apiKey: "AIzaSyBhOPKsR8ZCnjSQAOpbKGJyflOyfEoQk9Q",
+    authDomain: "reddit-content-assistant.firebaseapp.com",
+    projectId: "reddit-content-assistant",
+    storageBucket: "reddit-content-assistant.firebasestorage.app",
+    messagingSenderId: "481199590667",
+    appId: "1:481199590667:web:fd2310fa11b81f0153e60e",
+    measurementId: "G-JFDRFHS9KL"
 };
+
 const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
 
-// Utility function to copy text to clipboard
+// Función de utilidad para copiar texto al portapapeles
 const copyToClipboard = (text) => {
     const textarea = document.createElement('textarea');
     textarea.value = text;
@@ -28,37 +33,42 @@ const copyToClipboard = (text) => {
     textarea.select();
     try {
         document.execCommand('copy');
-        alert('Content copied to clipboard!'); // Using alert for simplicity, would use custom modal in production
+        // Reemplaza alert con un modal personalizado para producción
+        alert('¡Contenido copiado al portapapeles!');
     } catch (err) {
-        console.error('Error copying to clipboard: ', err);
-        alert('Error copying content to clipboard.');
+        console.error('Error al copiar al portapapeles: ', err);
+        // Reemplaza alert con un modal personalizado para producción
+        alert('Error al copiar el contenido al portapapeles.');
     }
     document.body.removeChild(textarea);
 };
 
-// Utility function to clean article content before copying
+// Función de utilidad para limpiar el contenido del artículo antes de copiar
 const cleanArticleContent = (rawContent) => {
     const lines = rawContent.split('\n');
     const cleanedLines = [];
 
     const instructionalPatterns = [
-        /^\s*---\s*$/, // Markdown separators
-        /^Hey, fellow entrepreneurs!/, // Specific intro line
-        /^\*\*The Challenge:\*\* \[Generate content here that contextualizes the common situation small businesses face\.\]$/, // Instructional placeholder for challenge
-        /^\*\*\[Generate a compelling subtitle for the Solution\/Guía - IN BOLD\]\*\*$/, // Specific subtitle instruction
-        /^\*\*Free\/Low-Cost Resources Mentioned:\*\*$/, // Specific section header
-        /^\*\*Your Turn:\*\*$/, // Specific section header
-        /^\*\*Conclusion:\*\* \[Generate a brief final summary of the benefit or main idea\.\]$/, // Specific conclusion instruction
-        /^\s*\[Generate a brief and catchy introduction here, grabbing attention and presenting the problem\/benefit\.\]\s*$/, // General instructional placeholders
+        /^\s*---\s*$/, // Separadores de Markdown
+        /^Hey, fellow entrepreneurs!/, // Línea de introducción específica
+        /^\*\*The Challenge:\*\* \[Generate content here that contextualizes the common situation small businesses face\.\]$/, // Marcador de posición instruccional para el desafío
+        /^\*\*\[Generate a compelling subtitle for the Solution\/Guía - IN BOLD\]\*\*$/, // Instrucción de subtítulo específica
+        /^\*\*Free\/Low-Cost Resources Mentioned:\*\*$/, // Encabezado de sección específico
+        /^\*\*Your Turn:\*\*$/, // Encabezado de sección específico
+        /^\*\*Conclusion:\*\* \[Generate a brief final summary of the benefit or main idea\.\]$/, // Instrucción de conclusión específica
+        /^\s*\[Generate a brief and catchy introduction here, grabbing attention and presenting the problem\/benefit\.\]\s*$/, // Marcadores de posición instruccionales generales
         /^\s*\[Generate content here that contextualizes the common situation small businesses face\.\]\s*$/,
-        /^\s*\[Generate the content for the "Solution" with practical tactics, tips, and strategies\. Use bullet points for steps or key takeaways\.\]\s*$/,
-        /^\* \*\*Step-by-Step or Key Points:\*\* Break down information into easy-to-follow sections\.$/, // Specific bullet point instructions
-        /^\* \*\*Brief Examples\/Hypothetical Cases:\*\* Illustrate points with scenarios that resonate with entrepreneurs\.$/,
-        /^\* \*\*Pro-Tip\/Common Pitfalls:\*\* Share warnings and shortcuts based on experience\.$/,
+        /^\s*\[Generate the content for the \"Solution\" with practical tactics, tips, and strategies\. Use bullet points for steps or key takeaways\.\]\s*$/,
+        /^\* \*Step-by-Step or Key Points:\*\* Break down information into easy-to-follow sections\.$/, // Instrucciones de puntos específicos
+        /^\* \*Brief Examples\/Hypothetical Cases:\*\* Illustrate points with scenarios that resonate with entrepreneurs\.$/,
+        /^\* \*Pro-Tip\/Common Pitfalls:\*\* Share warnings and shortcuts based on experience\.$/,
         /^\[Resource \d\]: Brief description and why it's valuable\.$/,
         /^\(Ensure these are resources from reliable companies and mostly free or low-cost\)\.$/,
         /^\s*\[Generate a Call-to-Action \(CTA\) here to encourage the community to comment, share experiences, or ask questions\.\]\s*$/,
         /^\s*\[Generate a brief final summary of the benefit or main idea\.\]\s*$/,
+        // NEW: Add a pattern to remove the title if it's duplicated at the very beginning of the content
+        new RegExp(`^\*\*${currentArticleDraft?.title || 'NO_TITLE_MATCH'}\*\*\s*, 'i'), // Match bold title at start
+        new RegExp(`^${currentArticleDraft?.title || 'NO_TITLE_MATCH'}\s*, 'i') // Match plain title at start
     ];
 
     for (const line of lines) {
@@ -74,7 +84,7 @@ const cleanArticleContent = (rawContent) => {
         }
     }
 
-    // Remove leading/trailing empty lines and collapse multiple empty lines into one
+    // Eliminar líneas vacías iniciales/finales y colapsar múltiples líneas vacías en una
     return cleanedLines
         .filter((line, index, arr) => {
             const isBlank = line.trim() === '';
@@ -96,7 +106,9 @@ const App = () => {
     const [suggestedIdeas, setSuggestedIdeas] = useState([]);
     const [currentArticleDraft, setCurrentArticleDraft] = useState(null);
     const [articles, setArticles] = useState([]);
-    const [viewingArticle, setViewingArticle] = useState(null); // To view a specific article from history
+    const [viewingArticle, setViewingArticle] = useState(null); // Para ver un artículo específico del historial
+    const [redditTrends, setRedditTrends] = useState([]);
+    const [selectedSubreddit, setSelectedSubreddit] = useState('growmybusinessnow');
 
     const flairs = [
         "🚀 Growth Hacks & Breakthroughs",
@@ -105,47 +117,61 @@ const App = () => {
         "💸 Profit Pathways & Funding Funnel"
     ];
 
-    // Firebase Initialization and Authentication
+    // --- Reddit API Integration ---
+    const fetchRedditTrends = async () => {
+        setLoading(true);
+        setError(null);
+        try {
+            const trendsData = await fetchTrends(selectedSubreddit);
+            setRedditTrends(trendsData);
+        } catch (err) {
+            console.error("Error fetching Reddit trends:", err);
+            setError(`Error fetching Reddit trends: ${err.message}`);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+
+    // Inicialización y Autenticación de Firebase
     useEffect(() => {
         const initFirebase = async () => {
             try {
-                // Only initialize Firebase if a valid config is provided (i.e., not the dummy local one)
-                // or if it's running in the Canvas environment.
-                const isCanvasEnv = typeof __firebase_config !== 'undefined';
-                const hasRealConfig = firebaseConfig.apiKey && firebaseConfig.apiKey !== "dummy-api-key";
+                // Determinar si se proporciona una configuración real de Firebase (desde Canvas o explícitamente por el usuario)
+                const isRealFirebaseConfig = firebaseConfig.apiKey && firebaseConfig.apiKey !== "dummy-api-key-for-local-dev";
 
-                let app;
-                if (isCanvasEnv || hasRealConfig) {
-                    app = initializeApp(firebaseConfig);
+                if (isRealFirebaseConfig) {
+                    const app = initializeApp(firebaseConfig);
                     const firestore = getFirestore(app);
                     const authInstance = getAuth(app);
                     setDb(firestore);
                     setAuth(authInstance);
 
-                    // Listen for auth state changes
                     onAuthStateChanged(authInstance, async (user) => {
                         if (user) {
                             setUserId(user.uid);
-                            setLoading(false);
                         } else {
-                            if (initialAuthToken) {
+                            if (initialAuthToken) { // Este token solo está disponible en Canvas
                                 await signInWithCustomToken(authInstance, initialAuthToken);
                             } else {
+                                // Para aplicaciones desplegadas (no Canvas) o desarrollo local sin token, iniciar sesión anónimamente
                                 await signInAnonymously(authInstance);
                             }
                         }
+                        setLoading(false); // Establecer loading en false después de determinar el estado de autenticación
                     });
                 } else {
-                    // For local development without real Firebase, just set loading to false
-                    // and provide a dummy userId to allow UI interaction.
-                    console.warn("Running in local development mode without real Firebase connection.");
+                    // Ejecutando sin una conexión real a Firebase (desarrollo local o desplegado sin configuración)
+                    console.warn("Ejecutando sin una conexión real a Firebase. Las operaciones de Firestore no se persistirán.");
                     setLoading(false);
-                    setUserId("local-dev-user"); // Dummy user ID for local testing
+                    setUserId("local-dev-user"); // ID de usuario ficticio para operaciones en memoria
+                    setDb(null); // Asegurar que db sea null
+                    setAuth(null); // Asegurar que auth sea null
                 }
 
             } catch (err) {
-                console.error("Error initializing Firebase:", err);
-                setError("Error initializing the application. Please try again.");
+                console.error("Error al inicializar Firebase:", err);
+                setError("Error al inicializar la aplicación. Asegúrate de que la configuración de Firebase sea correcta.");
                 setLoading(false);
             }
         };
@@ -153,35 +179,35 @@ const App = () => {
         initFirebase();
     }, []);
 
-    // Fetch ideas and articles when userId is available
+    // Obtener ideas y artículos cuando userId esté disponible
     useEffect(() => {
-        // Only attempt to fetch from Firestore if db is initialized and userId is real (not dummy local-dev-user)
-        if (!db || !userId || userId === "local-dev-user") {
-            // For local dev, we won't fetch/save to Firestore unless real config is present.
-            // Ideas and articles will be transient in memory.
+        // Solo intentar obtener de Firestore si db está inicializado y userId no es el ficticio "local-dev-user"
+        if (!db || userId === "local-dev-user") {
+            // Para el desarrollo local o modo sin DB, no se obtendrá/guardará en Firestore.
+            // Las ideas y los artículos serán transitorios en memoria.
             return;
         }
 
-        // Fetch suggested ideas (private to user)
+        // Obtener ideas sugeridas (privadas del usuario)
         const ideasCollectionRef = collection(db, `artifacts/${appId}/users/${userId}/article_ideas`);
         const qIdeas = query(ideasCollectionRef);
         const unsubscribeIdeas = onSnapshot(qIdeas, (snapshot) => {
             const ideasData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
             setSuggestedIdeas(ideasData);
         }, (err) => {
-            console.error("Error fetching ideas:", err);
-            setError("Error loading ideas.");
+            console.error("Error al obtener ideas:", err);
+            setError("Error al cargar ideas.");
         });
 
-        // Fetch articles (public for the app)
+        // Obtener artículos (públicos para la aplicación)
         const articlesCollectionRef = collection(db, `artifacts/${appId}/public/data/articles`);
         const qArticles = query(articlesCollectionRef);
         const unsubscribeArticles = onSnapshot(qArticles, (snapshot) => {
             const articlesData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
             setArticles(articlesData);
         }, (err) => {
-            console.error("Error fetching articles:", err);
-            setError("Error loading articles.");
+            console.error("Error al obtener artículos:", err);
+            setError("Error al cargar artículos.");
         });
 
         return () => {
@@ -190,222 +216,213 @@ const App = () => {
         };
     }, [db, userId]);
 
-    // LLM API Call function
-    const callGeminiAPI = async (prompt, isStructured = false, schema = {}) => {
+    // Generar Ideas de Artículos
+    const generateIdeas = async () => {
         setLoading(true);
         setError(null);
         try {
-            let chatHistory = [{ role: "user", parts: [{ text: prompt }] }];
-            const payload = { contents: chatHistory };
-
-            if (isStructured) {
-                payload.generationConfig = {
-                    responseMimeType: "application/json",
-                    responseSchema: schema
-                };
+            if (!db) {
+                console.warn("Firestore no conectado. Generando ideas en memoria.");
             }
 
-            // When running locally, the API key might not be available.
-            // The Canvas environment injects it. For local testing of AI generation,
-            // you might need to manually set an API key here if you have one,
-            // or understand that AI generation won't work locally without it.
-            const apiKey = "AIzaSyDtpEEXOTuBCmrGNqz-uDExRZeTn_jqYPI"; // Canvas will provide this at runtime
-            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+            let prompt;
+            if (redditTrends.length > 0) {
+                const trendingTitles = redditTrends.map(post => `- "${post.title}"`).join('\n');
+                prompt = `You are an expert content strategist for the Reddit community r/${selectedSubreddit}`;
 
-            const response = await fetch(apiUrl, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
-            });
+                prompt += `
 
-            if (!response.ok) {
-                const errorData = await response.json();
-                throw new Error(`API error: ${response.status} - ${errorData.error.message || 'Unknown error'}`);
-            }
+Based on the following list of currently popular post titles from the community:
+${trendingTitles}
 
-            const result = await response.json();
+Generate 5 new, attractive, and valuable article title ideas that capture a similar style or address related topics. The goal is to create content that will resonate strongly with the community. Focus on practical, actionable strategies for small businesses in the USA, using free or low-cost resources.
 
-            if (result.candidates && result.candidates.length > 0 && result.candidates[0].content && result.candidates[0].content.parts && result.candidates[0].content.parts.length > 0) {
-                const text = result.candidates[0].content.parts[0].text;
-                return isStructured ? JSON.parse(text) : text;
+Assign each new idea to one of the following flairs:
+- 🚀 Growth Hacks & Breakthroughs
+- 💡 Freebie Fortune Finders
+- 📈 Digital Domination Playbook
+- 💸 Profit Pathways & Funding Funnel
+
+Output format JSON:
+[
+    { "title": "New Idea Title 1", "flair": "Corresponding Flair" },
+    { "title": "New Idea Title 2", "flair": "Corresponding Flair" },
+    ...
+]`;
             } else {
-                throw new Error("Unexpected response from Gemini API.");
+                prompt = `Generate 5 attractive and valuable article title ideas for a Reddit community named r/${selectedSubreddit}, focused on growth strategies for small businesses and entrepreneurs in the USA, using free or low-cost resources. Articles should be practical and actionable.
+            Assign each idea to one of the following flairs:
+            - 🚀 Growth Hacks & Breakthroughs
+            - 💡 Freebie Fortune Finders
+            - 📈 Digital Domination Playbook
+            - 💸 Profit Pathways & Funding Funnel
+
+            Output format JSON:
+            [
+                { "title": "Idea Title 1", "flair": "Corresponding Flair" },
+                { "title": "Idea Title 2", "flair": "Corresponding Flair" },
+                ...
+            ]`;
+            }
+
+            const schema = {
+                type: "ARRAY",
+                items: {
+                    type: "OBJECT",
+                    properties: {
+                        "title": { "type": "STRING" },
+                        "flair": { "type": "STRING" }
+                    },
+                    "propertyOrdering": ["title", "flair"]
+                }
+            };
+
+            const newIdeas = await callGeminiAPI(prompt, true, schema);
+            if (newIdeas) {
+                if (db) { // Solo guardar en Firestore si db está realmente conectado
+                    const ideasCollectionRef = collection(db, `artifacts/${appId}/users/${userId}/article_ideas`);
+                    for (const idea of newIdeas) {
+                        await addDoc(ideasCollectionRef, { ...idea, status: 'pending', createdAt: new Date() });
+                    }
+                } else {
+                    // Para el desarrollo local/modo sin DB, gestionar ideas en memoria
+                    setSuggestedIdeas(prev => [...prev, ...newIdeas.map(idea => ({ ...idea, id: Math.random().toString(36).substring(2, 9), status: 'pending', createdAt: new Date() }))]);
+                }
             }
         } catch (err) {
-            console.error("Error calling Gemini API:", err);
-            setError(`Error generating content: ${err.message}`);
-            return null;
+            setError(`Error al generar ideas: ${err.message}`);
         } finally {
             setLoading(false);
         }
     };
 
-    // Generate Article Ideas
-    const generateIdeas = async () => {
-        if (!db && userId !== "local-dev-user") { // Only allow if db is ready or in local-dev mode
-            setError("Application is not ready. Please wait.");
-            return;
-        }
-
-        const prompt = `Generate 5 attractive and valuable article title ideas for a Reddit community named r/growmybusinessnow, focused on growth strategies for small businesses and entrepreneurs in the USA, using free or low-cost resources. Articles should be practical and actionable.
-        Assign each idea to one of the following flairs:
-        - 🚀 Growth Hacks & Breakthroughs
-        - 💡 Freebie Fortune Finders
-        - 📈 Digital Domination Playbook
-        - 💸 Profit Pathways & Funding Funnel
-
-        Output format JSON:
-        [
-            { "title": "Idea Title 1", "flair": "Corresponding Flair" },
-            { "title": "Idea Title 2", "flair": "Corresponding Flair" },
-            ...
-        ]`;
-
-        const schema = {
-            type: "ARRAY",
-            items: {
-                type: "OBJECT",
-                properties: {
-                    "title": { "type": "STRING" },
-                    "flair": { "type": "STRING" }
-                },
-                "propertyOrdering": ["title", "flair"]
-            }
-        };
-
-        const newIdeas = await callGeminiAPI(prompt, true, schema);
-        if (newIdeas) {
-            if (db && userId !== "local-dev-user") { // Only save to Firestore if real db connection
-                const ideasCollectionRef = collection(db, `artifacts/${appId}/users/${userId}/article_ideas`);
-                for (const idea of newIdeas) {
-                    await addDoc(ideasCollectionRef, { ...idea, status: 'pending', createdAt: new Date() });
-                }
-            } else {
-                // For local dev, manage ideas in memory
-                setSuggestedIdeas(prev => [...prev, ...newIdeas.map(idea => ({ ...idea, id: Math.random().toString(36).substring(2, 9), status: 'pending', createdAt: new Date() }))]);
-            }
-        }
-    };
-
-    // Generate Full Article Draft
+    // Generar Borrador de Artículo Completo
     const generateArticleDraft = async (idea) => {
-        if (!db && userId !== "local-dev-user") { // Only allow if db is ready or in local-dev mode
-            setError("Application is not ready. Please wait.");
-            return;
-        }
+        setLoading(true);
+        setError(null);
+        try {
+            const articlePrompt = `Write a detailed and valuable article in ENGLISH for the Reddit community r/${selectedSubreddit}, with the title "**${idea.title}**" and under the flair "${idea.flair}".
+The article must be practical, actionable, and focused on growth strategies for small businesses and entrepreneurs in the USA, leveraging free or low-cost online resources.
+Ensure that the main article title is provided in the prompt's structure, and **do NOT repeat the title within the article's introduction or body content.**
+All subtitles within the body of the article must be in **bold Markdown** (using **text**).
+Make the language engaging, conversational, and easy to read. Use varied sentence structures and clear, concise points.
+Do NOT include any bracketed instructions like "[Generate content here]" or "---" separators in the final article output. Generate the actual content directly for each section.
 
-        const articlePrompt = `Write a detailed and valuable article in ENGLISH for the Reddit community r/growmybusinessnow, with the title "**${idea.title}**" and under the flair "${idea.flair}".
-        The article must be practical, actionable, and focused on growth strategies for small businesses and entrepreneurs in the USA, leveraging free or low-cost online resources.
-        Ensure that the main article title and ALL subtitles within the body of the article are in **bold Markdown** (using **text**).
-        Make the language engaging, conversational, and easy to read. Use varied sentence structures and clear, concise points.
-        Do NOT include any bracketed instructions like "[Generate content here]" or "---" separators in the final article output. Generate the actual content directly for each section.
+Follow this structure:
 
-        Follow this structure:
+**${idea.title}**
 
-        **${idea.title}**
+Hey, fellow entrepreneurs!
 
-        Hey, fellow entrepreneurs!
+[Generate a brief and catchy introduction here, grabbing attention and presenting the problem/benefit. Do NOT repeat the title in this section.]
 
-        [Generate a brief and catchy introduction here, grabbing attention and presenting the problem/benefit.]
+**The Challenge:** [Generate content here that contextualizes the common situation small businesses face.]
 
-        **The Challenge:** [Generate content here that contextualizes the common situation small businesses face.]
+**[Generate a compelling subtitle for the Solution/Guide - IN BOLD]**
 
-        **[Generate a compelling subtitle for the Solution/Guide - IN BOLD]**
+[Generate the content for the "Solution" with practical tactics, tips, and strategies. Use bullet points for steps or key takeaways.]
+* **Step-by-Step or Key Points:** Break down information into easy-to-follow sections.
+* **Brief Examples/Hypothetical Cases:** Illustrate points with scenarios that resonate with entrepreneurs.
+* **Pro-Tip/Common Pitfalls:** Share warnings and shortcuts based on experience.
 
-        [Generate the content for the "Solution" with practical tactics, tips, and strategies. Use bullet points for steps or key takeaways.]
-        * **Step-by-Step or Key Points:** Break down information into easy-to-follow sections.
-        * **Brief Examples/Hypothetical Cases:** Illustrate points with scenarios that resonate with entrepreneurs.
-        * **Pro-Tip/Common Pitfalls:** Share warnings and shortcuts based on experience.
+**Free/Low-Cost Resources Mentioned:**
 
-        **Free/Low-Cost Resources Mentioned:**
+* [Resource 1]: Brief description and why it's valuable.
+* [Resource 2]: Brief description and why it's valuable.
+(Ensure these are resources from reliable companies and mostly free or low-cost).
 
-        * [Resource 1]: Brief description and why it's valuable.
-        * [Resource 2]: Brief description and why it's valuable.
-        (Ensure these are resources from reliable companies and mostly free or low-cost).
+**Your Turn:**
 
-        **Your Turn:**
+[Generate a Call-to-Action (CTA) here to encourage the community to comment, share experiences, or ask questions.]
 
-        [Generate a Call-to-Action (CTA) here to encourage the community to comment, share experiences, or ask questions.]
+**Conclusion:** [Generate a brief final summary of the benefit or main idea.]
 
-        **Conclusion:** [Generate a brief final summary of the benefit or main idea.]
+The content should be attractive, easy to read, and highly useful. The tone should be optimistic and empowering.
+`;
 
-        The content should be attractive, easy to read, and highly useful. The tone should be optimistic and empowering.
-        `;
-
-        const draft = await callGeminiAPI(articlePrompt);
-        if (draft) {
-            setCurrentArticleDraft({
-                title: idea.title,
-                flair: idea.flair,
-                content: draft,
-                status: 'draft',
-                createdAt: new Date(),
-                ideaId: idea.id // Link to the original idea
-            });
-            // Update idea status to 'approved' in Firestore (if real db) or memory (if local)
-            if (db && userId !== "local-dev-user") {
-                const ideaDocRef = doc(db, `artifacts/${appId}/users/${userId}/article_ideas`, idea.id);
-                await updateDoc(ideaDocRef, { status: 'approved' });
-            } else {
-                setSuggestedIdeas(prev => prev.map(item => item.id === idea.id ? { ...item, status: 'approved' } : item));
+            const draft = await callGeminiAPI(articlePrompt);
+            if (draft) {
+                setCurrentArticleDraft({
+                    title: idea.title,
+                    flair: idea.flair,
+                    content: draft,
+                    status: 'draft',
+                    createdAt: new Date(),
+                    ideaId: idea.id // Enlazar a la idea original
+                });
+                // Actualizar el estado de la idea a 'approved' en Firestore (si hay DB real) o en memoria (si es local)
+                if (db) { // Solo actualizar en Firestore si db está realmente conectado
+                    const ideaDocRef = doc(db, `artifacts/${appId}/users/${userId}/article_ideas`, idea.id);
+                    await updateDoc(ideaDocRef, { status: 'approved' });
+                } else {
+                    setSuggestedIdeas(prev => prev.map(item => item.id === idea.id ? { ...item, status: 'approved' } : item));
+                }
             }
+        } catch (err) {
+            setError(`Error al generar el borrador del artículo: ${err.message}`);
+        } finally {
+            setLoading(false);
         }
     };
 
-    // Save Article to Public Collection
+    // Guardar Artículo en la Colección Pública
     const publishArticle = async () => {
         if (!currentArticleDraft) {
-            setError("No article draft to publish.");
+            setError("No hay borrador de artículo para publicar.");
             return;
         }
 
         setLoading(true);
         try {
-            if (db && userId !== "local-dev-user") { // Only save to Firestore if real db connection
+            if (db) { // Solo guardar en Firestore si db está realmente conectado
                 const articlesCollectionRef = collection(db, `artifacts/${appId}/public/data/articles`);
                 await addDoc(articlesCollectionRef, {
                     ...currentArticleDraft,
                     status: 'published',
                     publishedAt: new Date(),
-                    authorId: userId // Store the author's ID
+                    authorId: userId // Guardar el ID del autor
                 });
+                alert("¡Artículo guardado en el historial de tu aplicación!");
             } else {
-                // For local dev, manage articles in memory
+                // Para el desarrollo local/modo sin DB, gestionar artículos en memoria
                 setArticles(prev => [...prev, { ...currentArticleDraft, id: Math.random().toString(36).substring(2, 9), status: 'published', publishedAt: new Date() }]);
+                alert("¡Artículo guardado en el historial de tu aplicación (solo en memoria, no persistido)!");
             }
-            setCurrentArticleDraft(null); // Clear the current draft
-            alert("Article saved to your app history!"); // Changed alert message
+            setCurrentArticleDraft(null); // Borrar el borrador actual
         } catch (err) {
-            console.error("Error publishing article:", err);
-            setError("Error saving the article."); // Changed error message
+            console.error("Error al publicar artículo:", err);
+            setError("Error al guardar el artículo.");
         } finally {
             setLoading(false);
         }
     };
 
     const rejectIdea = async (ideaId) => {
-        if (!db && userId !== "local-dev-user") { // Allow rejection in local dev without db
+        if (db) { // Solo intentar la actualización de Firestore si db está realmente conectado
+            try {
+                const ideaDocRef = doc(db, `artifacts/${appId}/users/${userId}/article_ideas`, ideaId);
+                await updateDoc(ideaDocRef, { status: 'rejected' });
+            } catch (err) {
+                console.error("Error al rechazar idea:", err);
+                setError("Error al rechazar la idea.");
+            }
+        } else {
+            // Si no hay conexión real a la DB, realizar la actualización en memoria
+            console.warn("Firestore no conectado. Rechazando idea en memoria.");
             setSuggestedIdeas(prev => prev.map(item => item.id === ideaId ? { ...item, status: 'rejected' } : item));
-            return;
-        }
-        try {
-            const ideaDocRef = doc(db, `artifacts/${appId}/users/${userId}/article_ideas`, ideaId);
-            await updateDoc(ideaDocRef, { status: 'rejected' });
-        } catch (err) {
-            console.error("Error rejecting idea:", err);
-            setError("Error rejecting the idea.");
+            setError(null); // Limpiar cualquier error previo si se maneja en memoria
         }
     };
 
-    // New function to export article data as CSV for Google Sheet
+    // Nueva función para exportar datos del artículo como CSV para Google Sheet
     const handleExportToSheet = () => {
         if (!currentArticleDraft) {
-            alert("Please generate an article draft first.");
+            alert("Por favor, genera un borrador de artículo primero.");
             return;
         }
 
         const cleanedContent = cleanArticleContent(currentArticleDraft.content);
-        // Basic CSV formatting: escape double quotes and enclose in quotes if comma exists
+        // Formato CSV básico: escapar comillas dobles y encerrar entre comillas si hay comas
         const escapeCsv = (text) => {
             if (text.includes(',') || text.includes('"') || text.includes('\n')) {
                 return `"${text.replace(/"/g, '""')}"`;
@@ -421,58 +438,44 @@ const App = () => {
 
         copyToClipboard(csvData);
         alert(
-            "Article data (Title, Flair, Content) copied as CSV!\n\n" +
-            "Now, go to your Google Sheet, select a cell, and paste (Ctrl+V or Cmd+V) to add this article for Make.com."
+            "Datos del artículo (Título, Flair, Contenido) copiados como CSV!\n\n" +
+            "Ahora, ve a tu Hoja de Google, selecciona una celda y pega (Ctrl+V o Cmd+V) para añadir este artículo para Make.com."
         );
     };
 
-    // New function to simulate publishing to Reddit via a backend (e.g., Cloudflare Worker)
+    // Nueva función para simular la publicación en Reddit a través de un backend (ej. Cloudflare Worker)
     const handlePublishToRedditBackend = async () => {
         if (!currentArticleDraft) {
-            alert("Please generate an article draft first.");
+            alert("Por favor, genera un borrador de artículo primero.");
             return;
         }
 
         setLoading(true);
+        setError(null);
         try {
             const cleanedContent = cleanArticleContent(currentArticleDraft.content);
-            const response = await fetch('https://reddit-api-worker.growmybisznow.workers.dev/publish-reddit', { // YOUR ACTUAL WORKER URL
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    // You might need to send an authorization token here if your Worker requires it
-                },
-                body: JSON.stringify({
-                    title: currentArticleDraft.title,
-                    flair: currentArticleDraft.flair, // You might need to map this to a Flair ID in your Worker
-                    content: cleanedContent,
-                    subreddit: 'growmybusinessnow' // Your subreddit name
-                })
+            const result = await publishToReddit({
+                title: currentArticleDraft.title,
+                flair: currentArticleDraft.flair,
+                content: cleanedContent,
+                subreddit: selectedSubreddit
             });
-
-            if (response.ok) {
-                const result = await response.json();
-                alert(`Article successfully sent to backend for Reddit publishing! Status: ${result.status || 'Success'}`);
-                // Optionally, save to app history after successful backend call
-                publishArticle(); // This will save to Firestore history
-            } else {
-                const errorData = await response.json();
-                alert(`Failed to send article to backend for Reddit publishing: ${errorData.message || response.statusText}`);
-            }
+            alert(`¡Artículo enviado exitosamente al backend para publicación en Reddit! Estado: ${result.status || 'Éxito'}`);
+            await publishArticle();
         } catch (err) {
-            console.error("Error publishing to Reddit via backend:", err);
-            alert(`An error occurred while trying to publish to Reddit: ${err.message}`);
+            alert(`Fallo al enviar el artículo al backend para publicación en Reddit: ${err.message}`);
         } finally {
             setLoading(false);
         }
     };
 
 
+
     if (loading && !userId) {
         return (
             <div className="min-h-screen flex items-center justify-center bg-gray-100 p-4">
                 <div className="bg-white p-6 rounded-lg shadow-md text-center">
-                    <p className="text-lg font-semibold text-gray-700">Loading application and authenticating...</p>
+                    <p className="text-lg font-semibold text-gray-700">Cargando aplicación y autenticando...</p>
                     <div className="mt-4 animate-spin rounded-full h-12 w-12 border-b-2 border-green-500 mx-auto"></div>
                 </div>
             </div>
@@ -497,24 +500,60 @@ const App = () => {
                     <span className="text-gray-600">r/</span>growmybusinessnow Content Assistant
                 </h1>
                 <div className="text-sm text-gray-500">
-                    User ID: <span className="font-mono text-gray-700 break-all">{userId}</span>
+                    ID de Usuario: <span className="font-mono text-gray-700 break-all">{userId}</span>
                 </div>
             </header>
 
             <main className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                {/* Suggested Ideas Panel */}
+                {/* Panel de Tendencias de Reddit */}
                 <section className="lg:col-span-1 bg-white p-6 rounded-lg shadow-md flex flex-col">
-                    <h2 className="text-xl font-semibold text-gray-700 mb-4">Suggested Ideas</h2>
+                    <h2 className="text-xl font-semibold text-gray-700 mb-4">Tendencias de Reddit</h2>
+                    <div className="flex gap-2 mb-4">
+                        <input
+                            type="text"
+                            value={selectedSubreddit}
+                            onChange={(e) => setSelectedSubreddit(e.target.value)}
+                            placeholder="ej. entrepreneurs"
+                            className="flex-grow p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent transition"
+                        />
+                        <button
+                            onClick={fetchRedditTrends}
+                            className="bg-orange-500 hover:bg-orange-600 text-white font-bold py-2 px-4 rounded-lg shadow-md transition duration-300 ease-in-out"
+                            disabled={loading}
+                        >
+                            {loading ? 'Analizando...' : 'Analizar'}
+                        </button>
+                    </div>
+
+                    {redditTrends.length === 0 && !loading && (
+                        <p className="text-gray-500 text-center mt-4">Analiza las tendencias para ver los posts populares.</p>
+                    )}
+
+                    <div className="space-y-3 flex-grow overflow-y-auto max-h-[400px] lg:max-h-[unset]">
+                        {redditTrends.map((post) => (
+                            <div key={post.id} className="p-3 border border-gray-200 rounded-lg bg-gray-50">
+                                <a href={`https://reddit.com${post.permalink}`} target="_blank" rel="noopener noreferrer" className="text-lg font-medium text-blue-600 hover:underline">{post.title}</a>
+                                <div className="text-sm text-gray-500 mt-1">
+                                    <span>Upvotes: {post.score}</span> | <span>Comentarios: {post.num_comments}</span>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </section>
+
+                {/* Panel de Ideas Sugeridas */}
+                <section className="lg:col-span-1 bg-white p-6 rounded-lg shadow-md flex flex-col">
+                    <h2 className="text-xl font-semibold text-gray-700 mb-4">Ideas Sugeridas</h2>
                     <button
                         onClick={generateIdeas}
                         className="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded-lg shadow-md transition duration-300 ease-in-out mb-4 w-full"
                         disabled={loading}
                     >
-                        {loading ? 'Generating...' : 'Generate New Ideas'}
+                        {loading ? 'Generando...' : 'Generar Nuevas Ideas'}
                     </button>
 
                     {suggestedIdeas.length === 0 && !loading && (
-                        <p className="text-gray-500 text-center mt-4">Click "Generate New Ideas" to get started.</p>
+                        <p className="text-gray-500 text-center mt-4">Haz clic en "Generar Nuevas Ideas" para empezar.</p>
                     )}
 
                     <div className="space-y-3 flex-grow overflow-y-auto max-h-[400px] lg:max-h-[unset]">
@@ -528,14 +567,14 @@ const App = () => {
                                         className="flex-1 bg-blue-500 hover:bg-blue-600 text-white text-sm py-2 px-3 rounded-md transition duration-300"
                                         disabled={loading}
                                     >
-                                        {loading ? 'Generating...' : 'Approve & Generate Draft'}
+                                        {loading ? 'Generando...' : 'Aprobar y Generar Borrador'}
                                     </button>
                                     <button
                                         onClick={() => rejectIdea(idea.id)}
                                         className="bg-red-500 hover:bg-red-600 text-white text-sm py-2 px-3 rounded-md transition duration-300"
                                         disabled={loading}
                                     >
-                                        Reject
+                                        Rechazar
                                     </button>
                                 </div>
                             </div>
@@ -543,13 +582,13 @@ const App = () => {
                     </div>
                 </section>
 
-                {/* Article Draft Panel */}
-                <section className="lg:col-span-2 bg-white p-6 rounded-lg shadow-md flex flex-col">
-                    <h2 className="text-xl font-semibold text-gray-700 mb-4">Article Draft</h2>
+                {/* Panel de Borrador de Artículo */}
+                <section className="lg:col-span-1 bg-white p-6 rounded-lg shadow-md flex flex-col">
+                    <h2 className="text-xl font-semibold text-gray-700 mb-4">Borrador de Artículo</h2>
                     {loading && (
                         <div className="text-center py-8">
                             <div className="animate-spin rounded-full h-16 w-16 border-t-2 border-b-2 border-green-500 mx-auto"></div>
-                            <p className="mt-4 text-gray-600">Generating draft, please wait...</p>
+                            <p className="mt-4 text-gray-600">Generando borrador, por favor espera...</p>
                         </div>
                     )}
                     {currentArticleDraft ? (
@@ -557,7 +596,7 @@ const App = () => {
                             <h3 className="text-2xl font-bold text-gray-900 mb-2">{currentArticleDraft.title}</h3>
                             <span className="text-md text-green-600 font-semibold mb-4">{currentArticleDraft.flair}</span>
                             <div className="bg-gray-50 p-4 rounded-lg border border-gray-200 flex-grow overflow-y-auto max-h-[500px] lg:max-h-[unset] prose prose-sm sm:prose lg:prose-lg">
-                                {/* Using dangerouslySetInnerHTML to render Markdown */}
+                                {/* Usando dangerouslySetInnerHTML para renderizar Markdown */}
                                 <div dangerouslySetInnerHTML={{ __html: currentArticleDraft.content.replace(/\n/g, '<br/>') }} />
                             </div>
                             <div className="mt-4 flex flex-col sm:flex-row space-y-3 sm:space-y-0 sm:space-x-3">
@@ -566,48 +605,48 @@ const App = () => {
                                     className="flex-1 bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 px-4 rounded-lg shadow-md transition duration-300 ease-in-out"
                                     disabled={loading}
                                 >
-                                    Save to App History
+                                    Guardar en Historial de la App
                                 </button>
                                 <button
                                     onClick={() => copyToClipboard(cleanArticleContent(currentArticleDraft.content))}
                                     className="flex-1 bg-gray-200 hover:bg-gray-300 text-gray-800 font-bold py-2 px-4 rounded-lg shadow-md transition duration-300 ease-in-out"
                                 >
-                                    Copy Clean Content
+                                    Copiar Contenido Limpio
                                 </button>
                                 <button
-                                    onClick={handleExportToSheet} // New button for Google Sheet export
+                                    onClick={handleExportToSheet} // Nuevo botón para exportar a Google Sheet
                                     className="flex-1 bg-orange-500 hover:bg-orange-600 text-white font-bold py-2 px-4 rounded-lg shadow-md transition duration-300 ease-in-out"
                                     disabled={loading}
                                 >
-                                    Export to Google Sheet (Copy Data)
+                                    Exportar a Hoja de Google (Copiar Datos)
                                 </button>
                                 <button
-                                    onClick={handlePublishToRedditBackend} // New button for direct Reddit publishing via backend
+                                    onClick={handlePublishToRedditBackend} // Nuevo botón para publicar directamente en Reddit a través del backend
                                     className="flex-1 bg-red-700 hover:bg-red-800 text-white font-bold py-2 px-4 rounded-lg shadow-md transition duration-300 ease-in-out"
                                     disabled={loading}
                                 >
-                                    Publish to Reddit (via Backend)
+                                    Publicar en Reddit (vía Backend)
                                 </button>
                                 <button
                                     onClick={() => setCurrentArticleDraft(null)}
                                     className="flex-1 bg-red-500 hover:bg-red-600 text-white font-bold py-2 px-4 rounded-lg shadow-md transition duration-300 ease-in-out"
                                 >
-                                    Discard Draft
+                                    Descartar Borrador
                                 </button>
                             </div>
                         </div>
                     ) : (
                         <p className="text-gray-500 text-center mt-8">
-                            Select an idea to generate an article draft here.
+                            Selecciona una idea para generar un borrador de artículo aquí.
                         </p>
                     )}
                 </section>
 
-                {/* Published Articles History */}
+                {/* Historial de Artículos Publicados */}
                 <section className="lg:col-span-3 bg-white p-6 rounded-lg shadow-md mt-6">
-                    <h2 className="text-xl font-semibold text-gray-700 mb-4">My Published Articles</h2>
+                    <h2 className="text-xl font-semibold text-gray-700 mb-4">Mis Artículos Publicados</h2>
                     {articles.length === 0 && !loading && (
-                        <p className="text-gray-500 text-center">No articles published yet.</p>
+                        <p className="text-gray-500 text-center">Aún no hay artículos publicados.</p>
                     )}
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                         {articles.map((article) => (
@@ -615,19 +654,19 @@ const App = () => {
                                 <h3 className="text-lg font-medium text-gray-800">{article.title}</h3>
                                 <span className="text-sm text-green-600 font-semibold">{article.flair}</span>
                                 <p className="text-xs text-gray-500 mt-1">
-                                    Published: {new Date(article.publishedAt?.toDate()).toLocaleDateString()}
+                                    Publicado: {article.publishedAt && new Date(article.publishedAt.toDate ? article.publishedAt.toDate() : article.publishedAt).toLocaleDateString()}
                                 </p>
                                 <button
                                     onClick={() => setViewingArticle(article)}
                                     className="mt-3 bg-blue-500 hover:bg-blue-600 text-white text-sm py-1.5 px-3 rounded-md transition duration-300 w-full"
                                 >
-                                    View Article
+                                    Ver Artículo
                                 </button>
                             </div>
                         ))}
                     </div>
 
-                    {/* Modal to view full article */}
+                    {/* Modal para ver el artículo completo */}
                     {viewingArticle && (
                         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
                             <div className="bg-white rounded-lg shadow-xl p-6 w-full max-w-3xl max-h-[90vh] overflow-y-auto relative">
@@ -640,14 +679,14 @@ const App = () => {
                                 <h3 className="text-2xl font-bold text-gray-900 mb-2">{viewingArticle.title}</h3>
                                 <span className="text-md text-green-600 font-semibold mb-4">{viewingArticle.flair}</span>
                                 <div className="prose prose-sm sm:prose lg:prose-lg mt-4">
-                                    {/* Using dangerouslySetInnerHTML to render Markdown */}
+                                    {/* Usando dangerouslySetInnerHTML para renderizar Markdown */}
                                     <div dangerouslySetInnerHTML={{ __html: viewingArticle.content.replace(/\n/g, '<br/>') }} />
                                 </div>
                                 <button
                                     onClick={() => copyToClipboard(cleanArticleContent(viewingArticle.content))}
                                     className="mt-6 bg-gray-200 hover:bg-gray-300 text-gray-800 font-bold py-2 px-4 rounded-lg shadow-md transition duration-300 ease-in-out w-full"
                                 >
-                                    Copy Clean Content
+                                    Copiar Contenido Limpio
                                 </button>
                             </div>
                         </div>
