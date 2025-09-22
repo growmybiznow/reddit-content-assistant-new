@@ -64,8 +64,8 @@ const cleanArticleContent = (rawContent) => {
         /^\s*\[Generate a Call-to-Action \(CTA\) here to encourage the community to comment, share experiences, or ask questions\.\]\s*$/,
         /^\s*\[Generate a brief final summary of the benefit or main idea\.\]\s*$/,
         // NEW: Add a pattern to remove the title if it's duplicated at the very beginning of the content
-        new RegExp(`^\*\*${currentArticleDraft?.title || 'NO_TITLE_MATCH'}\*\*\s*, 'i'), // Match bold title at start
-        new RegExp(`^${currentArticleDraft?.title || 'NO_TITLE_MATCH'}\s*, 'i') // Match plain title at start
+        new RegExp(`^\*\*${currentArticleDraft?.title || 'NO_TITLE_MATCH'}\*\*\s*`, 'i'), // Match bold title at start
+        new RegExp(`^${currentArticleDraft?.title || 'NO_TITLE_MATCH'}\s*`, 'i') // Match plain title at start
     ];
 
     for (const line of lines) {
