@@ -20,7 +20,7 @@ export const callGeminiAPI = async (prompt, isStructured = false, schema = {}) =
             };
         }
 
-        const apiKey = ""; // Canvas la inyectará en tiempo de ejecución.
+        const apiKey = typeof import.meta !== 'undefined' ? import.meta.env.VITE_GEMINI_API_KEY : process.env.GEMINI_API_KEY;
         const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
 
         const response = await fetch(apiUrl, {
