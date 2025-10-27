@@ -20,7 +20,7 @@ export const callGeminiAPI = async (prompt, isStructured = false, schema = {}) =
             };
         }
 
-        const apiKey = typeof import.meta !== 'undefined' ? import.meta.env.VITE_GEMINI_API_KEY : process.env.GEMINI_API_KEY;
+        const apiKey = ""; // Canvas la inyectará en tiempo de ejecución.
         const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
 
         const response = await fetch(apiUrl, {
@@ -65,19 +65,23 @@ export const fetchRedditTrends = async (subreddit) => {
         });
 
         if (!response.ok) {
-            const errorText = await response.text();
-            throw new Error(`Failed to fetch Reddit trends with status ${response.status}: ${errorText}`);
+            // Verificar si la respuesta es JSON antes de intentar parsearla
+            const contentType = response.headers.get('content-type');
+            let errorMessage = `Fallo al obtener tendencias de Reddit: ${response.status} ${response.statusText}`;
+
+            if (contentType && contentType.includes('application/json')) {
+                const errorData = await response.json();
+                errorMessage += ` - ${errorData.message || JSON.stringify(errorData)}`;
+            } else {
+                const errorText = await response.text();
+                errorMessage += ` - ${errorText}`;
+            }
+            throw new Error(errorMessage);
         }
 
-        try {
-            return await response.json();
-        } catch (jsonError) {
-            const responseText = await response.text();
-            throw new Error(`Failed to parse JSON response from Reddit trends API. Response: ${responseText}`);
-        }
-
+        return await response.json();
     } catch (err) {
-        console.error("Error in fetchRedditTrends:", err);
+        console.error("Error en fetchRedditTrends:", err);
         throw err;
     }
 };
@@ -98,8 +102,18 @@ export const publishToReddit = async (articleData) => {
         });
 
         if (!response.ok) {
-            const errorData = await response.json();
-            throw new Error(`Fallo al publicar en Reddit: ${errorData.message || response.statusText}`);
+            // Verificar si la respuesta es JSON antes de intentar parsearla
+            const contentType = response.headers.get('content-type');
+            let errorMessage = `Fallo al publicar en Reddit: ${response.status} ${response.statusText}`;
+
+            if (contentType && contentType.includes('application/json')) {
+                const errorData = await response.json();
+                errorMessage += ` - ${errorData.message || JSON.stringify(errorData)}`;
+            } else {
+                const errorText = await response.text();
+                errorMessage += ` - ${errorText}`;
+            }
+            throw new Error(errorMessage);
         }
 
         return await response.json();
