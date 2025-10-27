@@ -65,13 +65,19 @@ export const fetchRedditTrends = async (subreddit) => {
         });
 
         if (!response.ok) {
-            const errorData = await response.json();
-            throw new Error(`Fallo al obtener tendencias de Reddit: ${errorData.message || response.statusText}`);
+            const errorText = await response.text();
+            throw new Error(`Failed to fetch Reddit trends with status ${response.status}: ${errorText}`);
         }
 
-        return await response.json();
+        try {
+            return await response.json();
+        } catch (jsonError) {
+            const responseText = await response.text();
+            throw new Error(`Failed to parse JSON response from Reddit trends API. Response: ${responseText}`);
+        }
+
     } catch (err) {
-        console.error("Error en fetchRedditTrends:", err);
+        console.error("Error in fetchRedditTrends:", err);
         throw err;
     }
 };
