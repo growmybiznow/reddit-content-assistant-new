@@ -8,10 +8,20 @@
  * @param {object} schema - El esquema para la respuesta JSON.
  * @returns {Promise<string|object|null>} - El contenido generado.
  */
-export const callGeminiAPI = async (prompt, isStructured = false, schema = {}) => {
+export const callGeminiAPI = async (prompt, isStructured = false, schema = {}, customApiKey = null) => {
     try {
         let chatHistory = [{ role: "user", parts: [{ text: prompt }] }];
         const payload = { contents: chatHistory };
+
+        let apiKey = customApiKey;
+        if (!apiKey) {
+            if (typeof process !== 'undefined' && process.env && process.env.GEMINI_API_KEY) {
+                apiKey = process.env.GEMINI_API_KEY;
+            } else if (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_GEMINI_API_KEY) {
+                apiKey = import.meta.env.VITE_GEMINI_API_KEY;
+            }
+        }
+        if (!apiKey) throw new Error("Gemini API Key not configured. Please set GEMINI_API_KEY environment variable.");
 
         if (isStructured) {
             payload.generationConfig = {
@@ -20,7 +30,6 @@ export const callGeminiAPI = async (prompt, isStructured = false, schema = {}) =
             };
         }
 
-        const apiKey = ""; // Canvas la inyectará en tiempo de ejecución.
         const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
 
         const response = await fetch(apiUrl, {
@@ -61,7 +70,7 @@ export const fetchRedditTrends = async (subreddit) => {
             headers: {
                 'Content-Type': 'application/json',
             },
-            body: JSON.stringify({ subreddit })
+            body: JSON.stringify({ subreddit, clientSecret: process.env.REDDIT_CLIENT_SECRET })
         });
 
         if (!response.ok) {
@@ -98,7 +107,7 @@ export const publishToReddit = async (articleData) => {
             headers: {
                 'Content-Type': 'application/json',
             },
-            body: JSON.stringify(articleData)
+            body: JSON.stringify({ ...articleData, clientSecret: process.env.REDDIT_CLIENT_SECRET })
         });
 
         if (!response.ok) {

@@ -1,4 +1,5 @@
 // scripts/automate.js
+import 'dotenv/config';
 import fetch from 'node-fetch';
 import { callGeminiAPI, fetchRedditTrends, publishToReddit } from '../src/api.js';
 
@@ -113,8 +114,7 @@ The content should be attractive, easy to read, and highly useful. The tone shou
             title: idea.title,
             flair: idea.flair,
             content: articleContent,
-            subreddit: SUBREDDIT,
-            clientSecret: process.env.REDDIT_CLIENT_SECRET
+            subreddit: SUBREDDIT
         };
 
         const result = await publishToReddit(publishData);
